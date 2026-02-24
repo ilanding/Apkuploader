@@ -4,10 +4,40 @@ const fetch = require("node-fetch");
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
+async function getOrCreateRelease() {
+  const repo = process.env.REPO;
+  const token = process.env.GITHUB_TOKEN;
+
+  const releaseCheck = await fetch(`https://api.github.com/repos/${repo}/releases/tags/latest`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  if (releaseCheck.status === 200) {
+    const data = await releaseCheck.json();
+    return data;
+  }
+
+  const createRelease = await fetch(`https://api.github.com/repos/${repo}/releases`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      tag_name: "latest",
+      name: "Latest APK",
+      body: "Auto uploaded APK",
+      draft: false,
+      prerelease: false
+    })
+  });
+
+  return await createRelease.json();
+}
+
 bot.on("document", async (msg) => {
   const chatId = msg.chat.id;
   const fileId = msg.document.file_id;
-  const fileName = "app.apk";
 
   try {
     const file = await bot.getFile(fileId);
@@ -15,33 +45,21 @@ bot.on("document", async (msg) => {
 
     const response = await fetch(fileUrl);
     const buffer = await response.buffer();
-    const content = buffer.toString("base64");
 
-    let sha;
-    const check = await fetch(`https://api.github.com/repos/${process.env.REPO}/contents/${fileName}`, {
-      headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
-    });
+    const release = await getOrCreateRelease();
+    const uploadUrl = release.upload_url.replace("{?name,label}", "");
 
-    if (check.status === 200) {
-      const data = await check.json();
-      sha = data.sha;
-    }
-
-    await fetch(`https://api.github.com/repos/${process.env.REPO}/contents/${fileName}`, {
-      method: "PUT",
+    await fetch(`${uploadUrl}?name=app.apk`, {
+      method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/octet-stream"
       },
-      body: JSON.stringify({
-        message: "APK Updated via Telegram",
-        content: content,
-        sha: sha
-      })
+      body: buffer
     });
 
-    bot.sendMessage(chatId, "APK uploaded successfully!");
+    bot.sendMessage(chatId, "✅ APK uploaded to GitHub Release successfully!");
   } catch (err) {
-    bot.sendMessage(chatId, "Error: " + err.message);
+    bot.sendMessage(chatId, "❌ Error: " + err.message);
   }
 });
